@@ -87,7 +87,7 @@ def dl3(args) -> DeepLabV3:
         encoder_name=args.ename,
         encoder_depth=args.edepth,
         encoder_weights=args.eweight,
-        decoder_channels=args.dchannels,
+        decoder_channels=args.dl3dchannels,
         in_channels=args.inc,
         classes=args.cls,
         upsampling=args.ups
@@ -99,7 +99,7 @@ def dl3p(args) -> DeepLabV3Plus:
         encoder_depth=args.edepth,
         encoder_weights=args.eweight,
         encoder_output_stride=args.estride,
-        decoder_channels=args.args.dchannels,
+        decoder_channels=args.dl3dchannels,
         decoder_atrous_rates=args.drates,
         in_channels=args.inc,
         classes=args.cls,

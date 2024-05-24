@@ -6,3 +6,4 @@ TMPDIR=./.cache pip install accelerate einops
 TMPDIR=./.cache pip install albumentations
 TMPDIR=./.cache pip install segmentation_models_pytorch
 TMPDIR=./.cache pip install torchmetrics
+TMPDIR=./.cache pip install segformer-pytorch
