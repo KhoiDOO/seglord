@@ -8,7 +8,6 @@ import torch.nn.functional as F
 import numpy as np
 import torch
 import cv2
-import warnings
 import albumentations as A
 
 
@@ -78,8 +77,8 @@ def get_trans_nonnorm_lst():
 
 class CityNormal(Dataset):
     def __init__(self, 
-                 root: str, 
-                 train: bool, 
+                 root: str | None = None, 
+                 train: bool = True, 
                  size: Tuple[int] = (256, 512)
                 ) -> None:
         super().__init__()
@@ -128,9 +127,13 @@ class CityNormal(Dataset):
             34 : ['license plate', -1, 'vehicle']
         }
 
-        self.img_dir = root + f'/leftImg8bit_trainvaltest/leftImg8bit/{self.subset}'
+        if root is None:
+            root = '/media/mountHDD3/data_storage/cityscapes/unzip'
+        self.root = root
+
+        self.img_dir = self.root + f'/leftImg8bit_trainvaltest/leftImg8bit/{self.subset}'
         self.img_paths = glob(self.img_dir + "/*/*")
-        self.seg_dir = root + f"/gtFine_trainvaltest/gtFine/{self.subset}"
+        self.seg_dir = self.root + f"/gtFine_trainvaltest/gtFine/{self.subset}"
         self.seg_gts = glob(self.seg_dir + "/*/*_labelIds.png")
 
     def __len__(self):
@@ -174,13 +177,21 @@ class CityNormal(Dataset):
         return onehot
 
 if __name__ == "__main__":
-    ds = CityNormal(
+    train_ds = CityNormal(
         root='/media/mountHDD3/data_storage/cityscapes/unzip',
         train=True,
         size=(256, 512)
     )
 
-    sample = ds[0]
+    valid_ds = CityNormal(
+        root='/media/mountHDD3/data_storage/cityscapes/unzip',
+        train=False,
+        size=(256, 512)
+    )
+
+    print(len(train_ds), len(valid_ds))
+
+    sample = train_ds[0]
 
     img, mask = sample
 

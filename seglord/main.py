@@ -1,5 +1,8 @@
 from accelerate import Accelerator
 
+from data import get_data
+from models import get_model
+
 import argparse
 import random, torch
 import numpy as np
@@ -10,7 +13,7 @@ def main():
     parser = argparse.ArgumentParser(description="Segmentation Model CLI")
 
     # dataset
-    parser.add_argument('--ds', type=str, default='cityscape', help="dataset", choices=['cityscapes'])
+    parser.add_argument('--ds', type=str, default='citynormal', help="dataset", choices=['citynormal'])
     parser.add_argument('--dt', type=str, help='data dir')
     parser.add_argument('--bs', type=int, default=32, help='batch size')
     parser.add_argument('--wk', type=str, default=8, help='number of workers')
@@ -18,9 +21,9 @@ def main():
     parser.add_argument('--sz', type=int, nargs='+', required=False, help='size of processed image (h, w)')
 
     # model
-    parser.add_argument('--model', type=str, choices=['unet', 'unetpp', 'manet', 'lnet', 'fpn', 'psp', 'pan', 'dl3', 'dl3p'], help='Model type')
-    parser.add_argument('--ename', type=str, required=True, help='Encoder name')
-    parser.add_argument('--edepth', type=int, required=True, help='Encoder depth', choices=[3, 4, 5])
+    parser.add_argument('--model', type=str, default='unet', choices=['unet', 'unetpp', 'manet', 'lnet', 'fpn', 'psp', 'pan', 'dl3', 'dl3p'], help='Model type')
+    parser.add_argument('--ename', type=str, default='resnet18', help='Encoder name')
+    parser.add_argument('--edepth', type=int, default=5, help='Encoder depth', choices=[3, 4, 5])
     parser.add_argument('--eweight', type=str, default=None, help='Encoder weights', choices=[None, 'imagenet'])
     parser.add_argument('--bn', action='store_true', help='Use batch norm in decoder')
     parser.add_argument('--dchannels', type=int, nargs='+', default=[256, 128, 64, 32, 16], help='Decoder channels')
@@ -43,7 +46,7 @@ def main():
 
     # logging
     parser.add_argument('--wandb', action='store_true', help='toggle to use wandb')
-    parser.add_argument('--wandb_prj', type=str, required='seglord', help='wandb project name')
+    parser.add_argument('--wandb_prj', type=str, default='seglord', help='wandb project name')
     parser.add_argument('--wandb_entity', type=str, default='truelove', help='wandb entity name')
 
     args = parser.parse_args()
@@ -59,8 +62,15 @@ def main():
     device = accelerator.device
 
     # Data Loaders
+    train_ld, valid_ld, args = get_data(args=args)
 
     # Model
+    sample = torch.randn(1, 3, 256, 512)
+    model = get_model(args=args)
+    output = model(sample)
+    print(output.shape)
+
+    # Wandb
 
     # Accelerator Preparation
 
