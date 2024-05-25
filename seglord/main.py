@@ -2,6 +2,10 @@ from accelerate import Accelerator
 
 from data import get_data
 from models import get_model
+from losses import get_loss
+
+from torch.optim import Adam
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 import argparse
 import random, torch
@@ -41,7 +45,7 @@ def main():
     # training
     parser.add_argument('--seed', type=int, default=0, help='seed')
     parser.add_argument('--epochs', type=int, required=True, help='number of epochs')
-
+    parser.add_argument('--loss', type=str, default='ce', help='loss function', choices=['ce', 'dice', 'logdice', 'jaccard', 'logjaccard'])
     parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
 
     # logging
@@ -65,16 +69,18 @@ def main():
     train_ld, valid_ld, args = get_data(args=args)
 
     # Model
-    sample = torch.randn(1, 3, 256, 512)
     model = get_model(args=args)
-    output = model(sample)
-    print(output.shape)
+    criterion = get_loss(args=args)
+    opt = Adam(model.parameters(), lr=args.lr)
+    lrd = CosineAnnealingLR(optimizer=opt, T_max=len(train_ld))
 
     # Wandb
 
     # Accelerator Preparation
+    ddp_train_ld, ddp_valid_ld, ddp_model, ddp_opt, ddp_lrd = accelerator.prepare(train_ld, valid_ld, model, opt, lrd)
 
     # Training
+    
 
 
 if __name__ == '__main__':
