@@ -1,4 +1,5 @@
 from accelerate import Accelerator
+from accelerate.utils import set_seed
 
 from data import get_data
 from models import get_model
@@ -12,10 +13,9 @@ from torch.utils.data import DataLoader
 
 from tqdm import tqdm
 from utils import *
+from time import time
 
 import argparse
-import random, torch
-import numpy as np
 import torch
 
 TQDM_NCOLS = 50
@@ -66,20 +66,10 @@ def main():
     parser.add_argument('--cache', action='store_true', help='cache logging info before syncing')
 
     args = parser.parse_args()
-
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    set_seed(args.seed, deterministic=True)
 
     # Run
     args = folder_setup(args=args)
-
-    # Accelerator
-    accelerator = Accelerator()
-    device = accelerator.device
-    print(f"Device in use: {device}")
 
     # Data Loaders
     train_ld, valid_ld, args = get_data(args=args)
@@ -94,24 +84,33 @@ def main():
     print(f"Total number of Params: {pcnt}")
     args.pcnt = pcnt
 
+    # Accelerator
+    accelerator = Accelerator(log_with="wandb" if args.wandb else None)
+    device = accelerator.device
+    print(f"Device in use: {device}")
+    if args.wandb:
+        accelerator.init_trackers(project_name=args.wandb_prj, config=vars(args), 
+                                  init_kwargs={'entity': args.wandb_entity, 'name' : args.runid, 'force' : True})
+
     # Accelerator Preparation
+
     ddp_train_ld: DataLoader = accelerator.prepare_data_loader(train_ld)
     ddp_valid_ld: DataLoader = accelerator.prepare_data_loader(valid_ld)
     ddp_model: Module = accelerator.prepare_model(model)
     ddp_opt: Optimizer = accelerator.prepare_optimizer(opt)
     ddp_lrd: CosineAnnealingLR = accelerator.prepare_scheduler(lrd)
+    # ddp_model, ddp_opt, ddp_lrd, ddp_train_ld, ddp_valid_ld = accelerator.prepare(model, opt, lrd, train_ld, valid_ld)
 
     # Logging
     evaluator = Evaluator(args=args)
 
     # Training
-
-    with tqdm(total=args.epochs, ncols=TQDM_NCOLS, colour=TQDM_COLOUR) as pbar:
+    with tqdm(total=args.epochs, ncols=TQDM_NCOLS, colour=TQDM_COLOUR, disable=False if accelerator.is_main_process else True) as pbar:
 
         for epoch in range(args.epochs):
             
+            train_start = time()
             ddp_model.train()
-
             for (x, y_true) in ddp_train_ld:
                 
                 ddp_opt.zero_grad()
@@ -123,18 +122,25 @@ def main():
 
                 ddp_opt.step()
                 ddp_lrd.step()
+            train_time = time() - train_start
             
+            valid_start = time()
             ddp_model.eval()
             with torch.no_grad():
                 for (x, y_true) in ddp_valid_ld:
                     
                     y_pred = ddp_model(x)
                     evaluator(criterion=criterion, y_pred=y_pred, y_true=y_true, mode='valid')
+            valid_time = time() - valid_start
 
+            evaluator.add(value=train_time, key='train/time')
+            evaluator.add(value=valid_time, key='valid/time')
+            
             pbar.set_description(f'Epoch: {epoch} - {evaluator.txt}')
             pbar.update(1)
-            evaluator.step()
+            evaluator.step(accelerator=accelerator, model=ddp_model)
     
+    evaluator.sync(accelerator=accelerator)
     accelerator.end_training()
         
 

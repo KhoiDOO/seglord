@@ -5,7 +5,7 @@ from torch.nn.parallel import DistributedDataParallel
 
 from torchmetrics.segmentation import MeanIoU, GeneralizedDiceScore
 from torchmetrics.classification import \
-    Accuracy, ConfusionMatrix, BinaryAccuracy, \
+    Accuracy, BinaryAccuracy, \
     F1Score, BinaryF1Score, \
     AUROC, BinaryAUROC, \
     ROC, BinaryROC, \
@@ -15,10 +15,17 @@ from torchmetrics.classification import \
 from einops import rearrange
 
 from typing import List
+from .utils import *
+from glob import glob
+from tqdm import tqdm
 
 import argparse
 import torch
 import wandb
+import warnings
+
+TQDM_NCOLS = 50
+TQDM_COLOUR = 'MAGENTA'
 
 
 class Evaluator:
@@ -33,20 +40,12 @@ class Evaluator:
         self.args = args
         self.svdir = args.svdir
         self.me = args.me
+        self.cache = args.cache
         self.old_metric_value = 1e26 if self.me in ['loss'] else 0
         
         self.cpfunc = self.compare_func()
         self.best_path = self.svdir + "/best.pt"
         self.last_path = self.svdir + "/last.pt"
-
-        if self.wb:
-            self.run = wandb.init(
-                project=args.wandb_prj,
-                entity=args.wandb_entity,
-                config=args,
-                name=args.runid,
-                force=True
-            )
 
     def __call__(self, criterion: Module, y_pred: Tensor, y_true: Tensor, mode: str) -> Tensor:
         """_summary_
@@ -149,18 +148,55 @@ class Evaluator:
         elif self.vb == 2:
             return " - ".join([f'{key}: {value}:.2f' for key, value in self.__log_dict.items()])
     
-    def step(self, evaluator: Accelerator, model: Module | DistributedDataParallel):
-        
+    def step(self, accelerator: Accelerator, model: Module | DistributedDataParallel, epoch: int):
+
         if self.wb:
-            self.run.log(self.__log_dict)
+            if self.cache:
+                save_json(dct=self.__log_dict, path=self.svdir + f'log_{epoch}.json')
+            else:
+                accelerator.log(self.__log_dict)
+        else:
+            save_json(dct=self.__log_dict, path=self.svdir + f'log_{epoch}.json')
         
-        unwrap_model: Module = evaluator.unwrap_model(model)
+        unwrap_model: Module = accelerator.unwrap_model(model)
+
+        save_dict = {
+            'args' : self.args,
+            'model_state_dict': unwrap_model.state_dict()
+        }
+
+        metric_value = self.__log_dict[f'valid/{self.me}']
         
+        if self.cpfunc(metric_value, self.old_metric_value):
+            torch.save(save_dict, self.best_path)
+            self.old_metric_value = metric_value
         
-        if self.cpfunc(self.__log_dict[f'valid/{self.me}'], self.old_metric_value):
-            pass
+        torch.save(save_dict, self.last_path)
         
         self.__log_dict = {}
+    
+    def sync(self, accelerator: Accelerator):
+        
+        if self.cache:
+            files = glob(self.svdir + '/*.json')
+
+            with tqdm(total=len(files), ncols=TQDM_NCOLS, colour=TQDM_COLOUR) as pbar:
+                pbar.set_description('Syncing')
+                for file in files:
+                    dct = read_json(path=file)
+                    accelerator.log(values=dct)
+                    pbar.update(1)
+        
+        wandb_tracker = accelerator.get_tracker("wandb")
+
+        best_model_art = wandb.Artifact(name="best", type="model")
+        best_model_art.add_file(local_path=self.best_path)
+
+        last_model_art = wandb.Artifact(name="last", type="model")
+        last_model_art.add_file(local_path=self.last_path)
+
+        wandb_tracker.log_artifact(best_model_art)
+        wandb_tracker.log_artifact(last_model_art)
 
     def clswise_update(self, values: Tensor | List, mode: str, metric_name: str, bcnt: int):
         
@@ -210,3 +246,10 @@ class Evaluator:
             return cur <= old
         
         return smaller if self.args.me in ['loss'] else bigger
+
+    def add(self, value: int | float, key: str):
+        if key in self.__log_dict:
+            old_value = self.__log_dict[key]
+            warnings.warn(f'There exist {key} in the database, the old value {old_value} will be overwritten to {value}')
+        
+        self.__log_dict[key] = value
