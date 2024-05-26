@@ -1,12 +1,14 @@
 from segmentation_models_pytorch.losses import DiceLoss, JaccardLoss
+from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss, Module
 
-
-def get_loss(args):
+def get_loss(args) -> Module:
 
     mode = 'multiclass' if args.cls != 1 else 'binary'
+
+    # y_pred: torch.Tensor, y_true: torch.Tensor
     
     if args.loss == 'ce':
-        pass
+        return CrossEntropyLoss() if mode == 'multiclass' else BCEWithLogitsLoss()
     elif args.loss == 'dice':
         return DiceLoss(mode=mode)
     elif args.loss == 'logdice':

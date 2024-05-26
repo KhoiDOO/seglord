@@ -3,14 +3,23 @@ from accelerate import Accelerator
 from data import get_data
 from models import get_model
 from losses import get_loss
+from metrics import Evaluator
 
-from torch.optim import Adam
+from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.nn import Module
+from torch.utils.data import DataLoader
+
+from tqdm import tqdm
+from utils import *
 
 import argparse
 import random, torch
 import numpy as np
 import torch
+
+TQDM_NCOLS = 50
+TQDM_COLOUR = 'MAGENTA'
 
 
 def main():
@@ -47,11 +56,14 @@ def main():
     parser.add_argument('--epochs', type=int, required=True, help='number of epochs')
     parser.add_argument('--loss', type=str, default='ce', help='loss function', choices=['ce', 'dice', 'logdice', 'jaccard', 'logjaccard'])
     parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
+    parser.add_argument('--verbose', type=int, default=1, help='logging status')
+    parser.add_argument('--me', type=str, default='miou', help='metric used for model saving', choices=['loss', 'miou', 'dice', 'dice', 'acc', 'f1', 'auc', 'roc', 'sen', 'spe'])
 
     # logging
     parser.add_argument('--wandb', action='store_true', help='toggle to use wandb')
     parser.add_argument('--wandb_prj', type=str, default='seglord', help='wandb project name')
     parser.add_argument('--wandb_entity', type=str, default='truelove', help='wandb entity name')
+    parser.add_argument('--cache', action='store_true', help='cache logging info before syncing')
 
     args = parser.parse_args()
 
@@ -61,9 +73,13 @@ def main():
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+    # Run
+    args = folder_setup(args=args)
+
     # Accelerator
     accelerator = Accelerator()
     device = accelerator.device
+    print(f"Device in use: {device}")
 
     # Data Loaders
     train_ld, valid_ld, args = get_data(args=args)
@@ -72,16 +88,55 @@ def main():
     model = get_model(args=args)
     criterion = get_loss(args=args)
     opt = Adam(model.parameters(), lr=args.lr)
-    lrd = CosineAnnealingLR(optimizer=opt, T_max=len(train_ld))
+    lrd = CosineAnnealingLR(optimizer=opt, T_max=args.epoch * len(train_ld))
 
-    # Wandb
+    pcnt = param_cnt(model=model)
+    print(f"Total number of Params: {pcnt}")
+    args.pcnt = pcnt
 
     # Accelerator Preparation
-    ddp_train_ld, ddp_valid_ld, ddp_model, ddp_opt, ddp_lrd = accelerator.prepare(train_ld, valid_ld, model, opt, lrd)
+    ddp_train_ld: DataLoader = accelerator.prepare_data_loader(train_ld)
+    ddp_valid_ld: DataLoader = accelerator.prepare_data_loader(valid_ld)
+    ddp_model: Module = accelerator.prepare_model(model)
+    ddp_opt: Optimizer = accelerator.prepare_optimizer(opt)
+    ddp_lrd: CosineAnnealingLR = accelerator.prepare_scheduler(lrd)
+
+    # Logging
+    evaluator = Evaluator(args=args)
 
     # Training
-    
 
+    with tqdm(total=args.epochs, ncols=TQDM_NCOLS, colour=TQDM_COLOUR) as pbar:
+
+        for epoch in range(args.epochs):
+            
+            ddp_model.train()
+
+            for (x, y_true) in ddp_train_ld:
+                
+                ddp_opt.zero_grad()
+                
+                y_pred = ddp_model(x)
+                loss = evaluator(criterion=criterion, y_pred=y_pred, y_true=y_true, mode='train')
+                
+                accelerator.backward(loss)
+
+                ddp_opt.step()
+                ddp_lrd.step()
+            
+            ddp_model.eval()
+            with torch.no_grad():
+                for (x, y_true) in ddp_valid_ld:
+                    
+                    y_pred = ddp_model(x)
+                    evaluator(criterion=criterion, y_pred=y_pred, y_true=y_true, mode='valid')
+
+            pbar.set_description(f'Epoch: {epoch} - {evaluator.txt}')
+            pbar.update(1)
+            evaluator.step()
+    
+    accelerator.end_training()
+        
 
 if __name__ == '__main__':
     main()
