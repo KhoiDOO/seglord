@@ -86,7 +86,7 @@ class CityNormal(Dataset):
         super().__init__()
 
         self.aug = A.Compose(get_trans_lst(), p = 0.9)
-        self.res = A.Compose([A.Resize(size[0], size[1]), A.ToFloat(), A.Normalize(mean=(mean, mean, mean), std=(std, std, std))])
+        self.res = A.Compose([A.Resize(size[0], size[1]), A.Normalize(mean=(mean, mean, mean), std=(std, std, std))])
 
         self.tr = train
         self.subset = 'train' if train else 'val'

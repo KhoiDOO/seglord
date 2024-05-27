@@ -115,7 +115,7 @@ class Evaluator:
 
         if task == 'multiclass':
 
-            _y_pred_keep = F.one_hot(torch.argmax(_y_pred_flat, dim=1))
+            _y_pred_keep = F.one_hot(torch.argmax(_y_pred_flat, dim=1), num_classes=self.cls)
 
             # clswise miou
             mious = MeanIoU(num_classes=self.cls, per_class=True).to(device=device)(y_pred_idx, y_true_idx)
