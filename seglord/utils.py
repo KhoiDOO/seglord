@@ -23,9 +23,17 @@ def folder_setup(args: argparse):
 
     args.svdir = save_dir
 
-    return save_dir, args
+    return args
 
 def param_cnt(model: Module):
     pytorch_total_params = sum(p.numel() for p in model.parameters())
 
     return pytorch_total_params
+
+def finish(args: argparse):
+    svdir = args.svdir
+
+    done_path = svdir + '/done.txt'
+
+    with open(done_path, 'w') as file:
+        file.close()

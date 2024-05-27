@@ -3,8 +3,8 @@ from torch.utils.data import DataLoader
 
 def get_data(args):
     if args.ds == 'citynormal':
-        train_ds = CityNormal(root=args.dt, train=True, size=args.sz)
-        valid_ds = CityNormal(root=args.dt, train=False, size=args.sz)
+        train_ds = CityNormal(root=args.dt, train=True, size=args.sz, mean=args.mean, std=args.std)
+        valid_ds = CityNormal(root=args.dt, train=False, size=args.sz, mean=args.mean, std=args.std)
 
         args.inc = 3
         args.cls = 20

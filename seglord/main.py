@@ -18,7 +18,7 @@ from time import time
 import argparse
 import torch
 
-TQDM_NCOLS = 50
+TQDM_NCOLS = None
 TQDM_COLOUR = 'MAGENTA'
 
 
@@ -31,7 +31,9 @@ def main():
     parser.add_argument('--bs', type=int, default=32, help='batch size')
     parser.add_argument('--wk', type=str, default=8, help='number of workers')
     parser.add_argument('--pm', action='store_true', help='pin memory')
-    parser.add_argument('--sz', type=int, nargs='+', required=False, help='size of processed image (h, w)')
+    parser.add_argument('--sz', type=int, nargs='+', required=True, help='size of processed image (h, w)')
+    parser.add_argument('--mean', type=float, default=0.5, help='mean for normalization')
+    parser.add_argument('--std', type=float, default=0.5, help='standard deviation for normalization')
 
     # model
     parser.add_argument('--model', type=str, default='unet', choices=['unet', 'unetpp', 'manet', 'lnet', 'fpn', 'psp', 'pan', 'dl3', 'dl3p'], help='Model type')
@@ -56,8 +58,11 @@ def main():
     parser.add_argument('--epochs', type=int, required=True, help='number of epochs')
     parser.add_argument('--loss', type=str, default='ce', help='loss function', choices=['ce', 'dice', 'logdice', 'jaccard', 'logjaccard'])
     parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
-    parser.add_argument('--verbose', type=int, default=1, help='logging status')
-    parser.add_argument('--me', type=str, default='miou', help='metric used for model saving', choices=['loss', 'miou', 'dice', 'dice', 'acc', 'f1', 'auc', 'roc', 'sen', 'spe'])
+    parser.add_argument('--verbose', type=int, default=1, help='logging status', choices=[0, 1])
+    parser.add_argument('--me', type=str, default='miou', help='metric used for model saving', 
+                        choices=['loss', 'miou', 'dice', 'dice', 'acc', 'f1', 'auc', 'roc', 'sen', 'spe'])
+    parser.add_argument('--gas', type=int, default=1, help='gradient accumulation step')
+    parser.add_argument('--debug', action='store_true', help='debugging mode')
 
     # logging
     parser.add_argument('--wandb', action='store_true', help='toggle to use wandb')
@@ -78,22 +83,22 @@ def main():
     model = get_model(args=args)
     criterion = get_loss(args=args)
     opt = Adam(model.parameters(), lr=args.lr)
-    lrd = CosineAnnealingLR(optimizer=opt, T_max=args.epoch * len(train_ld))
+    lrd = CosineAnnealingLR(optimizer=opt, T_max=args.epochs * len(train_ld))
 
     pcnt = param_cnt(model=model)
     print(f"Total number of Params: {pcnt}")
     args.pcnt = pcnt
 
     # Accelerator
-    accelerator = Accelerator(log_with="wandb" if args.wandb else None)
+    accelerator = Accelerator(log_with="wandb" if args.wandb else None, gradient_accumulation_steps=args.gas)
     device = accelerator.device
     print(f"Device in use: {device}")
     if args.wandb:
         accelerator.init_trackers(project_name=args.wandb_prj, config=vars(args), 
-                                  init_kwargs={'entity': args.wandb_entity, 'name' : args.runid, 'force' : True})
+                                  init_kwargs={'wandb' : {'entity': args.wandb_entity, 'name' : args.runid, 'force' : True,
+                                                          'tags' : ['debug'] if args.debug else []}})
 
     # Accelerator Preparation
-
     ddp_train_ld: DataLoader = accelerator.prepare_data_loader(train_ld)
     ddp_valid_ld: DataLoader = accelerator.prepare_data_loader(valid_ld)
     ddp_model: Module = accelerator.prepare_model(model)
@@ -105,30 +110,24 @@ def main():
     evaluator = Evaluator(args=args)
 
     # Training
-    with tqdm(total=args.epochs, ncols=TQDM_NCOLS, colour=TQDM_COLOUR, disable=False if accelerator.is_main_process else True) as pbar:
-
+    with tqdm(total=args.epochs, ncols=TQDM_NCOLS, colour=TQDM_COLOUR, disable=not accelerator.is_main_process) as pbar:
         for epoch in range(args.epochs):
-            
             train_start = time()
             ddp_model.train()
             for (x, y_true) in ddp_train_ld:
-                
-                ddp_opt.zero_grad()
-                
-                y_pred = ddp_model(x)
-                loss = evaluator(criterion=criterion, y_pred=y_pred, y_true=y_true, mode='train')
-                
-                accelerator.backward(loss)
-
-                ddp_opt.step()
-                ddp_lrd.step()
+                with accelerator.accumulate(model): # gradient accumulation
+                    y_pred = ddp_model(x)
+                    loss = evaluator(criterion=criterion, y_pred=y_pred, y_true=y_true, mode='train')
+                    accelerator.backward(loss)
+                    ddp_opt.step()
+                    ddp_lrd.step()
+                    ddp_opt.zero_grad()
             train_time = time() - train_start
             
             valid_start = time()
             ddp_model.eval()
             with torch.no_grad():
                 for (x, y_true) in ddp_valid_ld:
-                    
                     y_pred = ddp_model(x)
                     evaluator(criterion=criterion, y_pred=y_pred, y_true=y_true, mode='valid')
             valid_time = time() - valid_start
@@ -138,11 +137,11 @@ def main():
             
             pbar.set_description(f'Epoch: {epoch} - {evaluator.txt}')
             pbar.update(1)
-            evaluator.step(accelerator=accelerator, model=ddp_model)
+            evaluator.step(accelerator=accelerator, model=ddp_model, epoch=epoch)
     
     evaluator.sync(accelerator=accelerator)
     accelerator.end_training()
-        
+    exit(0) if args.debug else finish(args=args)
 
 if __name__ == '__main__':
     main()

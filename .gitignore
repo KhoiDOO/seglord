@@ -161,3 +161,4 @@ cython_debug/
 
 seglord/wandb/
 seglord/runs/
+export/downloads/

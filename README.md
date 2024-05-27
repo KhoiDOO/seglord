@@ -1,4 +1,4 @@
-# seglord: Segmentation Lord
+# SegLord: Segmentation Lord
 
 # Installation
 ## Environment Setup
@@ -27,7 +27,15 @@ TMPDIR=./.cache pip install segformer-pytorch
 ```
 
 # Experiment Conduction
-This repo training procedure is built with the support of ```Accelerator```, thus enabling various modes of training. Before training, direct the working folder to ```path/to/seglord/seglord```.
+This repo training procedure is built with the support of ```Accelerator```, thus enabling various modes of training. Before training, direct the working folder to ```path/to/seglord/seglord```. There are two main ways for running with ```Accelerator```
+
+```
+accelerate launch {script_name.py} --arg1 --arg2 ...
+
+or 
+
+python -m accelerate.commands.launch --num_processes=2 {script_name.py} {--arg1} {--arg2}
+```
 
 ## Single GPU
 
@@ -59,3 +67,22 @@ accelerate launch --cpu main.py --ds citynormal --model dl3p --loss dice --wandb
 ```
 
 ## Precision Configuration
+```
+accelerate launch --multi_gpu --mixed_precision=fp16 --num_processes=2 main.py --ds citynormal --model dl3p --loss dice --wandb
+```
+
+## Run from configs
+
+There are templates for config file at ```path/to/seglord/seglord/scripts```.
+
+### Single GPU
+
+```
+CUDA_VISIBLE_DEVICES="0" accelerate launch --config_file ./scripts/single_gpu.yaml main.py --epochs 1 --debug --wandb
+```
+
+### Multi GPU
+
+```
+accelerate launch --config_file ./scripts/multi_gpu.yaml main.py --epochs 1 --debug --wandb
+```

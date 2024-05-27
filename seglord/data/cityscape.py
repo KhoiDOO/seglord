@@ -79,15 +79,21 @@ class CityNormal(Dataset):
     def __init__(self, 
                  root: str | None = None, 
                  train: bool = True, 
-                 size: Tuple[int] = (256, 512)
+                 size: Tuple[int] = (256, 512),
+                 mean: float = 0.5,
+                 std: float = 0.5
                 ) -> None:
         super().__init__()
 
         self.aug = A.Compose(get_trans_lst(), p = 0.9)
-        self.res = A.Compose([A.Resize(size[0], size[1]), A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
+        self.res = A.Compose([A.Resize(size[0], size[1]), A.ToFloat(), A.Normalize(mean=(mean, mean, mean), std=(std, std, std))])
 
         self.tr = train
         self.subset = 'train' if train else 'val'
+
+        if root is None:
+            root = '/media/mountHDD3/data_storage/cityscapes/unzip'
+        self.root = root
 
         self.semantic_map = {
             0 : ['unlabeled', 19, 'void'], 
@@ -126,10 +132,6 @@ class CityNormal(Dataset):
             33 : ['bicycle', 18, 'vehicle'],
             34 : ['license plate', -1, 'vehicle']
         }
-
-        if root is None:
-            root = '/media/mountHDD3/data_storage/cityscapes/unzip'
-        self.root = root
 
         self.img_dir = self.root + f'/leftImg8bit_trainvaltest/leftImg8bit/{self.subset}'
         self.img_paths = glob(self.img_dir + "/*/*")

@@ -1,7 +1,10 @@
+from accelerate import Accelerator
+from accelerate.tracking import WandBTracker
+
 from torch import Tensor
 from torch.nn import Module
-from accelerate import Accelerator
 from torch.nn.parallel import DistributedDataParallel
+from torch.nn import functional as F
 
 from torchmetrics.segmentation import MeanIoU, GeneralizedDiceScore
 from torchmetrics.classification import \
@@ -24,7 +27,7 @@ import torch
 import wandb
 import warnings
 
-TQDM_NCOLS = 50
+TQDM_NCOLS = None
 TQDM_COLOUR = 'MAGENTA'
 
 
@@ -37,12 +40,13 @@ class Evaluator:
         self.vlldcnt = args.vlldcnt
         self.vb = args.verbose
         self.wb = args.wandb
-        self.args = args
+        self.runid = args.runid
         self.svdir = args.svdir
         self.me = args.me
         self.cache = args.cache
+        self.args = args
+
         self.old_metric_value = 1e26 if self.me in ['loss'] else 0
-        
         self.cpfunc = self.compare_func()
         self.best_path = self.svdir + "/best.pt"
         self.last_path = self.svdir + "/last.pt"
@@ -52,7 +56,7 @@ class Evaluator:
 
         Args:
             criterion (Module): loss function module
-            y_pred (Tensor): prediction with shape (B, C, H ,W)
+            y_pred (Tensor): prediction with shape (B, C, H, W)
             y_true (Tensor): ground-truth with shape (B, C, H, W)
             mode (str): 'train' or 'valid
 
@@ -62,76 +66,82 @@ class Evaluator:
 
         bcnt = self.trldcnt if mode == 'train' else self.vlldcnt
         task = 'multiclass' if self.cls != 1 else 'binary'
+        device = y_pred.device
 
-        _y_pred = rearrange(y_pred, 'b c h w -> b h w c').flatten(0, 2)
-        _y_true = rearrange(y_true, 'b c h w -> b h w c').flatten(0, 2)
+        y_pred_idx = torch.argmax(y_pred, dim=1) if task == 'multiclass' else torch.sigmoid(y_pred)
+        y_true_idx = torch.argmax(y_true, dim=1) if task == 'multiclass' else y_true
 
-        _y_pred = torch.argmax(_y_pred, dim=1) if mode == 'train' else torch.sigmoid(_y_pred)
-        _y_true = torch.argmax(_y_true, dim=1) if mode == 'train' else _y_true
+        _y_pred_flat = rearrange(y_pred, 'b c h w -> b h w c').flatten(0, 2)
+        _y_true_flat = rearrange(y_true, 'b c h w -> b h w c').flatten(0, 2)
+
+        _y_pred = torch.argmax(_y_pred_flat, dim=1) if task == 'multiclass' else torch.sigmoid(_y_pred_flat)
+        _y_true = torch.argmax(_y_true_flat, dim=1) if task == 'multiclass' else _y_true_flat
         
         # loss
         loss = criterion(y_pred, y_true)
         self.update(value=loss, mode=mode, metric_name='loss', bcnt=bcnt)
 
         # miou
-        miou = MeanIoU(num_classes=self.cls)(y_pred, y_true)
+        miou = MeanIoU(num_classes=self.cls).to(device=device)(y_pred_idx, y_true_idx)
         self.update(value=miou, mode=mode, metric_name='miou', bcnt=bcnt)
         
         # dice
-        dice = GeneralizedDiceScore(num_classes=self.cls)(y_pred, y_true)
+        dice = GeneralizedDiceScore(num_classes=self.cls).to(device=device)(y_pred_idx, y_true_idx)
         self.update(value=dice, mode=mode, metric_name='dice', bcnt=bcnt)
 
         # acc
-        acc = Accuracy(task=task, num_classes=self.cls)(_y_pred, _y_true)
+        acc = Accuracy(task=task, num_classes=self.cls).to(device=device)(_y_pred, _y_true)
         self.update(value=acc, mode=mode, metric_name='acc', bcnt=bcnt)
 
         # f1
-        f1 = F1Score(task=task, num_classes=self.cls)(_y_pred, _y_true)
+        f1 = F1Score(task=task, num_classes=self.cls).to(device=device)(_y_pred, _y_true)
         self.update(value=f1, mode=mode, metric_name='f1', bcnt=bcnt)
 
         # auc
-        auc = AUROC(task=task, num_classes=self.cls)(_y_pred, _y_true)
-        self.update(value=auc, mode=mode, metric_name='auc', bcnt=bcnt)
+        # auc = AUROC(task=task, num_classes=self.cls).to(device=device)(_y_pred_flat, _y_true)
+        # self.update(value=auc, mode=mode, metric_name='auc', bcnt=bcnt)
 
         # roc
-        roc = ROC(task=task, num_classes=self.cls)(_y_pred, _y_true)
-        self.update(value=roc, mode=mode, metric_name='roc', bcnt=bcnt)
+        # roc = ROC(task=task, num_classes=self.cls).to(device=device)(_y_pred, _y_true)
+        # self.update(value=roc, mode=mode, metric_name='roc', bcnt=bcnt)
 
         # sen
-        sens = Recall(task=task, num_classes=self.cls)(_y_pred, _y_true)
+        sens = Recall(task=task, num_classes=self.cls).to(device=device)(_y_pred, _y_true)
         self.update(value=sens, mode=mode, metric_name='sen', bcnt=bcnt)
 
         # spe
-        spec = Specificity(task=task, num_classes=self.cls)(_y_pred, _y_true)
+        spec = Specificity(task=task, num_classes=self.cls).to(device=device)(_y_pred, _y_true)
         self.update(value=spec, mode=mode, metric_name='spe', bcnt=bcnt)
 
         if task == 'multiclass':
 
+            _y_pred_keep = F.one_hot(torch.argmax(_y_pred_flat, dim=1))
+
             # clswise miou
-            mious = MeanIoU(num_classes=self.cls, per_class=True)(y_pred, y_true)
+            mious = MeanIoU(num_classes=self.cls, per_class=True).to(device=device)(y_pred_idx, y_true_idx)
             self.clswise_update(values=mious, mode=mode, metric_name='miou', bcnt=bcnt)
 
             # clswise dice
-            dices = GeneralizedDiceScore(num_classes=self.cls, per_class=True)(y_pred, y_true)
+            dices = GeneralizedDiceScore(num_classes=self.cls, per_class=True).to(device=device)(y_pred_idx, y_true_idx)
             self.clswise_update(values=dices, mode=mode, metric_name='dice', bcnt=bcnt)
 
-            # clswise acc
-            self.clswise_update_metric(y_pred=_y_pred, y_true=_y_true, fn=BinarySpecificity(), mode=mode, metric_name='spe', bcnt=bcnt)
+            # clswise spe
+            self.clswise_update_metric(y_pred=_y_pred_keep, y_true=_y_true_flat, fn=BinarySpecificity().to(device=device), mode=mode, metric_name='spe', bcnt=bcnt)
 
             # clswise acc
-            self.clswise_update_metric(y_pred=_y_pred, y_true=_y_true, fn=BinaryAccuracy(), mode=mode, metric_name='acc', bcnt=bcnt)
+            self.clswise_update_metric(y_pred=_y_pred_keep, y_true=_y_true_flat, fn=BinaryAccuracy().to(device=device), mode=mode, metric_name='acc', bcnt=bcnt)
 
             # clswise f1 
-            self.clswise_update_metric(y_pred=_y_pred, y_true=_y_true, fn=BinaryF1Score(), mode=mode, metric_name='f1', bcnt=bcnt)
+            self.clswise_update_metric(y_pred=_y_pred_keep, y_true=_y_true_flat, fn=BinaryF1Score().to(device=device), mode=mode, metric_name='f1', bcnt=bcnt)
 
             # clswise sens 
-            self.clswise_update_metric(y_pred=_y_pred, y_true=_y_true, fn=BinaryRecall(), mode=mode, metric_name='sen', bcnt=bcnt)
+            self.clswise_update_metric(y_pred=_y_pred_keep, y_true=_y_true_flat, fn=BinaryRecall().to(device=device), mode=mode, metric_name='sen', bcnt=bcnt)
 
             # clswise auc 
-            self.clswise_update_metric(y_pred=_y_pred, y_true=_y_true, fn=BinaryAUROC(), mode=mode, metric_name='auc', bcnt=bcnt)
+            # self.clswise_update_metric(y_pred=_y_pred_keep, y_true=_y_true_flat, fn=BinaryAUROC().to(device=device), mode=mode, metric_name='auc', bcnt=bcnt)
 
             # clswise roc 
-            self.clswise_update_metric(y_pred=_y_pred, y_true=_y_true, fn=BinaryROC(), mode=mode, metric_name='roc', bcnt=bcnt)
+            # self.clswise_update_metric(y_pred=_y_pred_keep, y_true=_y_true_flat, fn=BinaryROC().to(device=device), mode=mode, metric_name='roc', bcnt=bcnt)
 
         return loss
 
@@ -144,19 +154,19 @@ class Evaluator:
         if self.vb == 0:
             return 'non verbose'
         elif self.vb == 1:
-            return " - ".join([f'{key}: {value}:.2f' for key, value in self.__log_dict.items() if '-' not in key])
-        elif self.vb == 2:
-            return " - ".join([f'{key}: {value}:.2f' for key, value in self.__log_dict.items()])
+            return " - ".join([f'{key}: {value:.2f}' for key, value in self.__log_dict.items() if key.split('/')[-1] in ['loss', 'miou', 'dice']])
+        # elif self.vb == 2:
+        #     return " - ".join([f'{key}: {value:.2f}' for key, value in self.__log_dict.items()])
     
     def step(self, accelerator: Accelerator, model: Module | DistributedDataParallel, epoch: int):
 
         if self.wb:
             if self.cache:
-                save_json(dct=self.__log_dict, path=self.svdir + f'log_{epoch}.json')
+                save_json(dct=self.__log_dict, path=self.svdir + f'/log_{epoch}.json')
             else:
                 accelerator.log(self.__log_dict)
         else:
-            save_json(dct=self.__log_dict, path=self.svdir + f'log_{epoch}.json')
+            save_json(dct=self.__log_dict, path=self.svdir + f'/log_{epoch}.json')
         
         unwrap_model: Module = accelerator.unwrap_model(model)
 
@@ -186,21 +196,21 @@ class Evaluator:
                     dct = read_json(path=file)
                     accelerator.log(values=dct)
                     pbar.update(1)
-        
-        wandb_tracker = accelerator.get_tracker("wandb")
+        if self.wb and accelerator.is_main_process:
+            wandb_tracker: WandBTracker = accelerator.get_tracker('wandb')
 
-        best_model_art = wandb.Artifact(name="best", type="model")
-        best_model_art.add_file(local_path=self.best_path)
+            best_model_art = wandb.Artifact(name=f'{self.runid}-best', type='model')
+            best_model_art.add_file(local_path=self.best_path)
 
-        last_model_art = wandb.Artifact(name="last", type="model")
-        last_model_art.add_file(local_path=self.last_path)
+            last_model_art = wandb.Artifact(name=f'{self.runid}-last', type='model')
+            last_model_art.add_file(local_path=self.last_path)
 
-        wandb_tracker.log_artifact(best_model_art)
-        wandb_tracker.log_artifact(last_model_art)
+            wandb_tracker.run.log_artifact(best_model_art)
+            wandb_tracker.run.log_artifact(last_model_art)
 
     def clswise_update(self, values: Tensor | List, mode: str, metric_name: str, bcnt: int):
         
-        values = values.tolist() if isinstance(Tensor) else values
+        values = values.tolist() if isinstance(values, Tensor) else values
         
         for idx, value in enumerate(values):
             key = f'{mode}/{idx}-{metric_name}'
@@ -221,7 +231,7 @@ class Evaluator:
             fn (Module): metric function
             mode (str): 'train' or 'valid
             metric_name (str): name of metric
-            bcnt (int): number of batchs
+            bcnt (int): number of batchss
         """
 
         values = [fn(y_pred[:, idx], y_true[:, idx]) for idx in range(self.cls)]
