@@ -48,7 +48,7 @@ def get_trans_lst():
         A.RandomShadow(p=0.2)
     ]
 
-def get_trans_nonnorm_lst():
+def get_trans_nonnoise_nonblur_lst():
     return [
         A.ShiftScaleRotate(shift_limit=0.0625, scale_limit=0.12, rotate_limit=15, p=0.5,
                           border_mode = cv2.BORDER_CONSTANT),
@@ -81,11 +81,12 @@ class CityNormal(Dataset):
                  train: bool = True, 
                  size: Tuple[int] = (256, 512),
                  mean: float = 0.5,
-                 std: float = 0.5
+                 std: float = 0.5,
+                 norm: bool = True
                 ) -> None:
         super().__init__()
 
-        self.aug = A.Compose(get_trans_lst(), p = 0.9)
+        self.aug = A.Compose(get_trans_lst() if norm else get_trans_nonnoise_nonblur_lst(), p = 0.9)
         self.res = A.Compose([A.Resize(size[0], size[1]), A.Normalize(mean=(mean, mean, mean), std=(std, std, std))])
 
         self.tr = train

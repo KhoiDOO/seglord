@@ -34,6 +34,7 @@ def main():
     parser.add_argument('--sz', type=int, nargs='+', required=True, help='size of processed image (h, w)')
     parser.add_argument('--mean', type=float, default=0.5, help='mean for normalization')
     parser.add_argument('--std', type=float, default=0.5, help='standard deviation for normalization')
+    parser.add_argument('--cnb', action='store_true', help='toggle to use noise and blur in augmentation')
 
     # model
     parser.add_argument('--model', type=str, default='unet', choices=['unet', 'unetpp', 'manet', 'lnet', 'fpn', 'psp', 'pan', 'dl3', 'dl3p'], help='Model type')
@@ -71,7 +72,6 @@ def main():
     parser.add_argument('--cache', action='store_true', help='cache logging info before syncing')
 
     args = parser.parse_args()
-    set_seed(args.seed, deterministic=True)
 
     # Run
     args = folder_setup(args=args)
@@ -91,8 +91,8 @@ def main():
 
     # Accelerator
     accelerator = Accelerator(log_with="wandb" if args.wandb else None, gradient_accumulation_steps=args.gas)
-    device = accelerator.device
-    print(f"Device in use: {device}")
+    print(f"Device in use: {accelerator.device}")
+    set_seed(args.seed, device_specific=True, deterministic=True)
     if args.wandb:
         accelerator.init_trackers(project_name=args.wandb_prj, config=vars(args), 
                                   init_kwargs={'wandb' : {'entity': args.wandb_entity, 'name' : args.runid, 'force' : True,
