@@ -1,6 +1,7 @@
 from typing import List, Dict
 from torch import Tensor
 from torch.nn import Module
+from torch.nn import functional as F
 
 from datetime import datetime
 
@@ -37,3 +38,13 @@ def finish(args: argparse):
 
     with open(done_path, 'w') as file:
         file.close()
+
+def interpolate(pred, target):
+    _, _, Hp, Wp = pred.shape
+    _, _, Ht, Wt = target.shape
+
+    if Hp < Ht or Wp < Wt:
+        pred = F.interpolate(input=pred, size=(Ht, Wt))
+        return pred
+    else:
+        return pred

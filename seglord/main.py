@@ -17,12 +17,16 @@ from time import time
 
 import argparse
 import torch
+import os
 
 TQDM_NCOLS = None
 TQDM_COLOUR = 'MAGENTA'
 
 
 def main():
+    
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+    
     parser = argparse.ArgumentParser(description="Segmentation Model CLI")
 
     # dataset
@@ -93,6 +97,7 @@ def main():
     accelerator = Accelerator(log_with="wandb" if args.wandb else None, gradient_accumulation_steps=args.gas)
     print(f"Device in use: {accelerator.device}")
     set_seed(args.seed, device_specific=True, deterministic=True)
+    args.np = accelerator.num_processes
     if args.wandb:
         accelerator.init_trackers(project_name=args.wandb_prj, config=vars(args), 
                                   init_kwargs={'wandb' : {'entity': args.wandb_entity, 'name' : args.runid, 'force' : True,
@@ -116,7 +121,7 @@ def main():
             ddp_model.train()
             for (x, y_true) in ddp_train_ld:
                 with accelerator.accumulate(model): # gradient accumulation
-                    y_pred = ddp_model(x)
+                    y_pred = interpolate(pred=ddp_model(x), target=y_true)
                     loss = evaluator(criterion=criterion, y_pred=y_pred, y_true=y_true, mode='train')
                     accelerator.backward(loss)
                     ddp_opt.step()
@@ -128,7 +133,7 @@ def main():
             ddp_model.eval()
             with torch.no_grad():
                 for (x, y_true) in ddp_valid_ld:
-                    y_pred = ddp_model(x)
+                    y_pred = interpolate(pred=ddp_model(x), target=y_true)
                     evaluator(criterion=criterion, y_pred=y_pred, y_true=y_true, mode='valid')
             valid_time = time() - valid_start
 
