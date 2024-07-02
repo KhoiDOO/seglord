@@ -55,7 +55,7 @@ def main():
     parser.add_argument('--decmerge', type=str, default='add', help='Decoder merge policy', choices=['add', 'cat'])
     parser.add_argument('--ups', type=int, default=4, help='Upsampling factor', choices=[4, 8])
     parser.add_argument('--pspoch', type=int, default=512, help='PSPNet output channels')
-    parser.add_argument('--estride', type=int, help='Encoder output stride')
+    parser.add_argument('--estride', type=int, default=16, help='Encoder output stride')
     parser.add_argument('--drates', type=int, nargs='+', default=[12, 24, 36], help='Decoder atrous rates')
 
     # training
